@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: latex-compiler
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
