@@ -1,13 +1,17 @@
 FROM node:18-slim
 
 # Install LaTeX
-RUN apt-get update && \
-    apt-get install -y \
-    texlive-latex-base \
-    texlive-latex-extra \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+  texlive-latex-base \
+  texlive-latex-recommended \
+  texlive-latex-extra \
+  texlive-fonts-recommended \
+  texlive-fonts-extra \
+  texlive-xetex \
+  texlive-lang-english \
+  latexmk \
+  && rm -rf /var/lib/apt/lists/*
+
 
 # Set working directory
 WORKDIR /app
