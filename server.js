@@ -13,8 +13,8 @@ app.use(express.json({ limit: '10mb' }));
 app.get('/', (req, res) => {
   res.json({ 
     status: 'LaTeX Compilation Service Running',
-    version: '1.0.2',
-    engine: 'pdflatex',
+    version: '1.0.3',
+    engine: 'xelatex',
     maxTimeout: '120s'
   });
 });
@@ -34,9 +34,9 @@ app.post('/compile', async (req, res) => {
     // Create stream from content
     const input = Readable.from([content]);
     
-    // Options for pdflatex
+    // Options for xelatex
     const options = {
-      cmd: 'pdflatex',
+      cmd: 'xelatex',
       passes: 1,
       errorLogs: true,
       inputs: process.env.TEXINPUTS || ''
