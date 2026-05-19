@@ -22,7 +22,7 @@ app.use(express.json({ limit: '10mb' }));
 app.get('/', (req, res) => {
   res.json({
     status: 'LaTeX Compilation Service Running',
-    version: '1.0.5',
+    version: '1.0.6',
     engine: 'xelatex',
     maxTimeout: '120s'
   });
