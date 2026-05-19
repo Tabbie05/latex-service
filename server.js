@@ -6,35 +6,56 @@ const { Readable } = require('stream');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Keep the process alive on any stray error. node-latex spawns child
+// processes that can emit errors on streams we don't always own; without
+// these guards the whole service exits with status 1 on a bad doc.
+process.on('uncaughtException', (err) => {
+  console.error('💥 uncaughtException (process kept alive):', err && err.stack || err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('💥 unhandledRejection (process kept alive):', err && err.stack || err);
+});
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Health check
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'LaTeX Compilation Service Running',
-    version: '1.0.3',
+    version: '1.0.4',
     engine: 'xelatex',
     maxTimeout: '120s'
   });
 });
 
-// Compile endpoint
 app.post('/compile', async (req, res) => {
+  let pdf;
+  let timeoutHandle;
+  let settled = false;
+
+  const safeRespond = (status, body) => {
+    if (settled || res.headersSent) return;
+    settled = true;
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    res.status(status).json(body);
+  };
+
   try {
     const { content } = req.body;
 
     if (!content || !content.trim()) {
-      return res.status(400).json({ error: 'No content provided' });
+      return safeRespond(400, { error: 'No content provided' });
     }
 
-    console.log('📝 Starting compilation...');
+    console.log('📝 Starting compilation…');
     console.log('📄 Content length:', content.length, 'characters');
 
-    // Create stream from content
     const input = Readable.from([content]);
-    
-    // Options for xelatex
+    input.on('error', (err) => {
+      console.error('❌ Input stream error:', err.message);
+      safeRespond(500, { error: 'Input stream error', details: err.message });
+    });
+
     const options = {
       cmd: 'xelatex',
       passes: 1,
@@ -42,40 +63,45 @@ app.post('/compile', async (req, res) => {
       inputs: process.env.TEXINPUTS || ''
     };
 
-    console.log('⚙️  Spawning pdflatex process...');
+    console.log('⚙️  Spawning xelatex process…');
 
-    const pdf = latex(input, options);
+    try {
+      pdf = latex(input, options);
+    } catch (err) {
+      console.error('❌ Failed to spawn xelatex:', err.message);
+      return safeRespond(500, { error: 'Failed to spawn compiler', details: err.message });
+    }
+
     const chunks = [];
-    let hasError = false;
-    let errorMessage = '';
 
-    // Collect PDF data
-    pdf.on('data', chunk => {
-      chunks.push(chunk);
+    pdf.on('data', (chunk) => chunks.push(chunk));
+
+    pdf.on('error', (err) => {
+      const msg = err && err.message ? err.message : String(err);
+      console.error('❌ LaTeX error:', msg);
+      safeRespond(500, {
+        error: 'LaTeX compilation failed',
+        details: msg,
+        hint: 'Check for undefined commands, missing packages, or syntax errors.'
+      });
+      // Drain any remaining bytes silently so the underlying child closes
+      try { pdf.resume(); } catch (_) { /* noop */ }
     });
-    
-    // Handle completion
-    pdf.on('end', () => {
-      if (hasError) {
-        console.error('❌ Compilation failed with errors');
-        return res.status(500).json({ 
-          error: 'LaTeX compilation failed',
-          details: errorMessage
-        });
-      }
 
+    pdf.on('end', () => {
+      if (settled) return;
       const pdfBuffer = Buffer.concat(chunks);
-      
+
       if (pdfBuffer.length === 0) {
-        console.error('❌ Empty PDF generated');
-        return res.status(500).json({ 
+        return safeRespond(500, {
           error: 'Generated empty PDF',
           hint: 'Check LaTeX syntax and package availability'
         });
       }
-      
+
       console.log('✅ SUCCESS! PDF size:', pdfBuffer.length, 'bytes');
-      
+      settled = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'inline; filename=document.pdf');
       res.setHeader('Content-Length', pdfBuffer.length);
@@ -83,42 +109,18 @@ app.post('/compile', async (req, res) => {
       res.send(pdfBuffer);
     });
 
-    // Handle errors
-    pdf.on('error', err => {
-      hasError = true;
-      errorMessage = err.message;
-      console.error('❌ LaTeX error:', err.message);
-      
-      // Only send response if headers not sent
-      if (!res.headersSent) {
-        res.status(500).json({ 
-          error: 'LaTeX compilation failed',
-          details: err.message,
-          hint: 'Check for missing packages or syntax errors'
-        });
-      }
-    });
-
-    // Timeout after 90 seconds
-    setTimeout(() => {
-      if (!res.headersSent) {
-        console.error('❌ Compilation timeout after 90 seconds');
-        pdf.destroy();
-        res.status(504).json({ 
-          error: 'Compilation timeout',
-          hint: 'Document too complex or server overloaded'
-        });
-      }
+    timeoutHandle = setTimeout(() => {
+      console.error('❌ Compilation timeout after 90 seconds');
+      try { pdf && pdf.destroy(); } catch (_) { /* noop */ }
+      safeRespond(504, {
+        error: 'Compilation timeout',
+        hint: 'Document too complex or server overloaded'
+      });
     }, 90000);
 
   } catch (error) {
     console.error('❌ Server error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Internal server error',
-        details: error.message 
-      });
-    }
+    safeRespond(500, { error: 'Internal server error', details: error.message });
   }
 });
 
