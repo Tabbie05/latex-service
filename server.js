@@ -22,7 +22,7 @@ app.use(express.json({ limit: '10mb' }));
 app.get('/', (req, res) => {
   res.json({
     status: 'LaTeX Compilation Service Running',
-    version: '1.0.4',
+    version: '1.0.5',
     engine: 'xelatex',
     maxTimeout: '120s'
   });
@@ -60,7 +60,12 @@ app.post('/compile', async (req, res) => {
       cmd: 'xelatex',
       passes: 1,
       errorLogs: true,
-      inputs: process.env.TEXINPUTS || ''
+      inputs: process.env.TEXINPUTS || '',
+      // -interaction=nonstopmode: never drop to interactive ? prompt on error.
+      // -halt-on-error: exit immediately on the first error rather than continuing
+      //   and accumulating cascade failures. Without these, an undefined command
+      //   (e.g. \faExternalLinkAlt) hangs the child until our 90s timeout.
+      args: ['-interaction=nonstopmode', '-halt-on-error']
     };
 
     console.log('⚙️  Spawning xelatex process…');
